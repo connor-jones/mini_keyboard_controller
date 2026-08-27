@@ -603,6 +603,19 @@ function ConvertFrom-PadReport {
     }
 }
 
+function Get-PadMediaName {
+    <#
+    .SYNOPSIS
+        Name a consumer-page usage code. Used by the key tester to label the
+        media events the pad emits.
+    #>
+    [CmdletBinding()]
+    param([int] $Code)
+
+    if ($script:ReverseMedia.ContainsKey($Code)) { return $script:ReverseMedia[$Code] }
+    '<consumer 0x{0:X4}>' -f $Code
+}
+
 function Read-PadBindings {
     <#
     .SYNOPSIS
@@ -947,29 +960,43 @@ function Write-PadConfig {
         [MiniKeyboard.HidTransport] $Pad,
         [psobject] $Config,
         [switch] $DryRun,
-        [scriptblock] $OnProgress
+        [scriptblock] $OnProgress,
+        [int[]] $Layer
     )
 
+    # Writing one layer takes about a third of the time of all three, which
+    # matters on pads where the other layers are unreachable anyway.
+    $selected = @($Config.Layers)
+    if ($Layer) {
+        $selected = @($Config.Layers | Where-Object { $Layer -contains $_.Number })
+        if ($selected.Count -eq 0) {
+            throw "No layer matched $($Layer -join ', '); the config defines $($Config.Layers.Count)."
+        }
+    }
+
+    # Loop variables must not be called $layer: PowerShell variable names are
+    # case-insensitive, so it would rebind the [int[]] $Layer parameter and the
+    # second iteration would fail converting a layer object to int[].
     $total = 0
-    foreach ($layer in $Config.Layers) {
-        $total += $layer.Buttons.Count + $layer.Knobs.Count
-        if ($null -ne $layer.LedColor) { $total++ }
-        if ($null -ne $layer.MacroDelayMs) { $total++ }
+    foreach ($layerConfig in $selected) {
+        $total += $layerConfig.Buttons.Count + $layerConfig.Knobs.Count
+        if ($null -ne $layerConfig.LedColor) { $total++ }
+        if ($null -ne $layerConfig.MacroDelayMs) { $total++ }
     }
 
     $done = 0
-    foreach ($layer in $Config.Layers) {
-        if ($null -ne $layer.MacroDelayMs) {
-            $report = New-PadDelayReport -Layer $layer.Number -DelayMs $layer.MacroDelayMs
-            Send-PadReport -Pad $Pad -Report $report -DryRun:$DryRun -Label "layer $($layer.Number) delay"
+    foreach ($layerConfig in $selected) {
+        if ($null -ne $layerConfig.MacroDelayMs) {
+            $report = New-PadDelayReport -Layer $layerConfig.Number -DelayMs $layerConfig.MacroDelayMs
+            Send-PadReport -Pad $Pad -Report $report -DryRun:$DryRun -Label "layer $($layerConfig.Number) delay"
             Send-PadReport -Pad $Pad -Report (New-PadCommitReport) -DryRun:$DryRun -Label 'commit'
             if (-not $DryRun) { Start-Sleep -Milliseconds $script:CommitDelayMs }
             $done++
         }
 
-        foreach ($entry in (@($layer.Buttons) + @($layer.Knobs))) {
+        foreach ($entry in (@($layerConfig.Buttons) + @($layerConfig.Knobs))) {
             $done++
-            $label = "Layer $($layer.Number): $($entry.Name) -> $($entry.Binding.Source)"
+            $label = "Layer $($layerConfig.Number): $($entry.Name) -> $($entry.Binding.Source)"
             if (-not $DryRun) {
                 Write-Progress -Activity 'Programming macro pad' -Status $label `
                     -PercentComplete ([int](100 * $done / [Math]::Max($total, 1)))
@@ -977,21 +1004,115 @@ function Write-PadConfig {
                     & $OnProgress $done $total $label
                 }
             }
-            Set-PadButton -Pad $Pad -ButtonId $entry.ButtonId -Layer $layer.Number `
+            Set-PadButton -Pad $Pad -ButtonId $entry.ButtonId -Layer $layerConfig.Number `
                 -Binding $entry.Binding -DryRun:$DryRun `
-                -Label "L$($layer.Number) $($entry.Name)"
+                -Label "L$($layerConfig.Number) $($entry.Name)"
         }
 
-        if ($null -ne $layer.LedColor) {
+        if ($null -ne $layerConfig.LedColor) {
             $done++
-            Set-PadLayerLed -Pad $Pad -Layer $layer.Number -Color $layer.LedColor `
-                -Effect $layer.LedEffect -DryRun:$DryRun
+            Set-PadLayerLed -Pad $Pad -Layer $layerConfig.Number -Color $layerConfig.LedColor `
+                -Effect $layerConfig.LedEffect -DryRun:$DryRun
         }
     }
 
     Save-PadFlash -Pad $Pad -DryRun:$DryRun
     if (-not $DryRun) {
         Write-Progress -Activity 'Programming macro pad' -Completed
+    }
+}
+
+function Test-PadWritten {
+    <#
+    .SYNOPSIS
+        Read the pad back and confirm it matches the config that was applied.
+    .DESCRIPTION
+        Compares encoded bytes rather than binding text, so equivalent spellings
+        (ctrl+shift+t vs shift+ctrl+t) cannot report a false mismatch.
+
+        Only the fields that survive a round trip are compared: [2] button,
+        [3] layer, [4] type, [10] count and the payload from [11]. Byte [1] is
+        the opcode, which reads back as 0xFA, and byte [6] is set to 0x05 by the
+        firmware on some slots -- neither says anything about the binding.
+
+        Mouse slots are reported as SKIPPED, never as passes: they do not read
+        back in the layout they are written in, so there is nothing to compare.
+    .OUTPUTS
+        One object per slot with Layer, Slot, Status (Match/Mismatch/Skipped),
+        Expected and Actual.
+    #>
+    [CmdletBinding()]
+    param(
+        [MiniKeyboard.HidTransport] $Pad,
+        [psobject] $Config,
+        [int[]] $Layer
+    )
+
+    $selected = @($Config.Layers)
+    if ($Layer) {
+        $selected = @($Config.Layers | Where-Object { $Layer -contains $_.Number })
+    }
+
+    # Index the device's current state by layer and button id.
+    $actual = @{}
+    foreach ($layerNumber in ($selected | ForEach-Object { $_.Number })) {
+        foreach ($report in (Read-PadLayer -Pad $Pad -Layer $layerNumber)) {
+            if ($report.Length -lt 13) { continue }
+            $actual["$layerNumber/$($report[2])"] = $report
+        }
+    }
+
+    foreach ($layerConfig in $selected) {
+        foreach ($entry in (@($layerConfig.Buttons) + @($layerConfig.Knobs))) {
+            $key = "$($layerConfig.Number)/$([int]$entry.ButtonId)"
+
+            if ($entry.Binding.Type -eq 'mouse') {
+                [pscustomobject]@{
+                    Layer = $layerConfig.Number; Slot = $entry.Name; Status = 'Skipped'
+                    Expected = $entry.Binding.Source
+                    Actual = 'mouse slots do not read back'
+                }
+                continue
+            }
+
+            if (-not $actual.ContainsKey($key)) {
+                [pscustomobject]@{
+                    Layer = $layerConfig.Number; Slot = $entry.Name; Status = 'Mismatch'
+                    Expected = $entry.Binding.Source; Actual = 'no report returned'
+                }
+                continue
+            }
+
+            $expectedReport = New-PadBindReport -ButtonId $entry.ButtonId `
+                -Layer $layerConfig.Number -Binding $entry.Binding
+            $actualReport = $actual[$key]
+
+            $same = $true
+            foreach ($i in @(2, 3, 4, 10)) {
+                if ($expectedReport[$i] -ne $actualReport[$i]) { $same = $false; break }
+            }
+            if ($same) {
+                # Payload length follows the count at [10]; keyboard slots use
+                # two bytes per keypress, media a single 16-bit code.
+                $payloadBytes = if ($expectedReport[4] -eq $script:MacroTypeMedia) {
+                    2
+                } else {
+                    2 * [int]$expectedReport[10]
+                }
+                for ($i = 11; $i -lt 11 + $payloadBytes; $i++) {
+                    if ($expectedReport[$i] -ne $actualReport[$i]) { $same = $false; break }
+                }
+            }
+
+            $decoded = ConvertFrom-PadReport -Report $actualReport
+            [pscustomobject]@{
+                Layer = $layerConfig.Number
+                Slot = $entry.Name
+                Status = $(if ($same) { 'Match' } else { 'Mismatch' })
+                Expected = $entry.Binding.Source
+                Actual = $decoded.Binding
+            }
+        }
     }
 }
 
@@ -1060,8 +1181,8 @@ Export-ModuleMember -Function @(
     'New-PadCommitReport', 'New-PadSaveReport', 'New-PadReadReport', 'New-PadReport',
     'Format-PadReport',
     'Read-PadLayer', 'Read-PadBindings', 'Export-PadConfig', 'ConvertTo-PadConfigFile',
-    'ConvertFrom-PadReport', 'ConvertFrom-PadModifier',
+    'ConvertFrom-PadReport', 'ConvertFrom-PadModifier', 'Get-PadMediaName',
     'Set-PadButton', 'Set-PadLayerLed', 'Save-PadFlash',
-    'Read-PadConfigFile', 'Write-PadConfig', 'Restore-PadConfig',
+    'Read-PadConfigFile', 'Write-PadConfig', 'Restore-PadConfig', 'Test-PadWritten',
     'Get-PadKeyNames'
 )

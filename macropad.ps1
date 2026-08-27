@@ -42,9 +42,26 @@ param(
     [Parameter(ParameterSetName = 'Validate', Mandatory = $true)]
     [string] $Validate,
 
-    # Program the pad from a config file.
+    # Program the pad from a config file, or a profile name from profiles\.
     [Parameter(ParameterSetName = 'Apply', Mandatory = $true)]
     [string] $Apply,
+
+    # Write only these layers. Omit for all three.
+    [Parameter(ParameterSetName = 'Apply')]
+    [ValidateRange(1, 3)]
+    [int[]] $Layer,
+
+    # After writing, read back and confirm the pad matches.
+    [Parameter(ParameterSetName = 'Apply')]
+    [switch] $Verify,
+
+    # Compare a config against the device without writing anything.
+    [Parameter(ParameterSetName = 'Compare', Mandatory = $true)]
+    [string] $Compare,
+
+    # List the saved profiles in profiles\.
+    [Parameter(ParameterSetName = 'Profiles')]
+    [switch] $Profiles,
 
     # Replay a backup captured by -Dump.
     [Parameter(ParameterSetName = 'Restore', Mandatory = $true)]
@@ -86,6 +103,45 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'src\MacroPad.psm1') -Force -DisableNameChecking
+
+# Pure logic (model, profiles); no WPF, so it loads fine outside the GUI.
+. (Join-Path $PSScriptRoot 'src\GuiModel.ps1')
+
+function Resolve-ConfigPath {
+    <#
+    .SYNOPSIS
+        Accept either a path or a profile name, so -Apply gaming works as well
+        as -Apply .\config.json.
+    #>
+    param([string] $Value)
+
+    if (Test-Path -LiteralPath $Value) { return (Resolve-Path -LiteralPath $Value).Path }
+    try {
+        return Resolve-PadProfile -Root $PSScriptRoot -Name $Value
+    } catch {
+        throw "'$Value' is neither a file nor a saved profile. $($_.Exception.Message)"
+    }
+}
+
+function Show-VerifyResult {
+    param($Results)
+
+    $results = @($Results)
+    $bad = @($results | Where-Object { $_.Status -eq 'Mismatch' })
+    $skipped = @($results | Where-Object { $_.Status -eq 'Skipped' })
+    $matched = @($results | Where-Object { $_.Status -eq 'Match' })
+
+    Write-Host ""
+    Write-Host "Verify: $($matched.Count) matched, $($bad.Count) mismatched, $($skipped.Count) skipped." -ForegroundColor Cyan
+    if ($skipped.Count -gt 0) {
+        Write-Host "  Skipped slots are mouse bindings, which this firmware does not read back." -ForegroundColor DarkGray
+    }
+    foreach ($entry in $bad) {
+        Write-Host ("  L{0} {1,-12} want '{2}'  device has '{3}'" -f `
+            $entry.Layer, $entry.Slot, $entry.Expected, $entry.Actual) -ForegroundColor Red
+    }
+    $bad.Count
+}
 
 if ($PSBoundParameters.ContainsKey('BindOpcode')) {
     Set-PadProtocolVariant -BindOpcode $BindOpcode
@@ -236,12 +292,13 @@ switch ($PSCmdlet.ParameterSetName) {
     }
 
     'Apply' {
-        $config = Read-PadConfigFile -Path $Apply
-        Write-Host "Config validated: $($config.Layers.Count) layer(s)." -ForegroundColor Green
+        $config = Read-PadConfigFile -Path (Resolve-ConfigPath -Value $Apply)
+        $scope = if ($Layer) { "layer $($Layer -join ', ')" } else { "$($config.Layers.Count) layer(s)" }
+        Write-Host "Config validated: $scope." -ForegroundColor Green
 
         if ($WhatIf) {
             Write-Host "`n--- Dry run: reports that WOULD be sent ---`n" -ForegroundColor Yellow
-            Write-PadConfig -Pad $null -Config $config -DryRun
+            Write-PadConfig -Pad $null -Config $config -Layer $Layer -DryRun
             Write-Host "`n--- Nothing was sent to the device. ---`n" -ForegroundColor Yellow
             break
         }
@@ -254,12 +311,42 @@ switch ($PSCmdlet.ParameterSetName) {
                 Save-Backup -Pad $pad -Path $backup -Note "pre-apply of $($config.Path)" | Out-Null
             }
 
-            Write-Host "Programming pad (this takes ~15s -- a 200ms settle is required per key)..." -ForegroundColor Cyan
-            Write-PadConfig -Pad $pad -Config $config
+            $estimate = if ($Layer) { '~5s per layer' } else { '~15s' }
+            Write-Host "Programming pad ($estimate -- a 200ms settle is required per key)..." -ForegroundColor Cyan
+            Write-PadConfig -Pad $pad -Config $config -Layer $Layer
             Write-Host "Done. Configuration saved to flash." -ForegroundColor Green
+
+            if ($Verify) {
+                Write-Host "Reading back to verify..." -ForegroundColor Cyan
+                $failures = Show-VerifyResult -Results (Test-PadWritten -Pad $pad -Config $config -Layer $Layer)
+                if ($failures -gt 0) { exit 1 }
+            }
         } finally {
             $pad.Dispose()
         }
+    }
+
+    'Compare' {
+        $config = Read-PadConfigFile -Path (Resolve-ConfigPath -Value $Compare)
+        $pad = Connect-Pad
+        try {
+            Write-Host "Comparing device against $($config.Path)..." -ForegroundColor Cyan
+            $failures = Show-VerifyResult -Results (Test-PadWritten -Pad $pad -Config $config)
+            if ($failures -gt 0) { exit 1 }
+        } finally {
+            $pad.Dispose()
+        }
+    }
+
+    'Profiles' {
+        $found = @(Get-PadProfile -Root $PSScriptRoot)
+        if ($found.Count -eq 0) {
+            Write-Host "`nNo profiles saved. Create one from the GUI (Profiles...) or drop a config into profiles\.`n"
+            break
+        }
+        Write-Host "`nSaved profiles:" -ForegroundColor Cyan
+        foreach ($entry in $found) { Write-Host ("  {0,-20} {1}" -f $entry.Name, $entry.Path) }
+        Write-Host "`nApply one with:  .\macropad.ps1 -Apply <name>`n"
     }
 
     'Restore' {

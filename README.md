@@ -28,20 +28,47 @@ Click a key, press the combination you want, hit **Apply to Pad**. Or use the CL
 .\macropad.ps1 -Apply config.json          # back up, program, save to flash
 .\macropad.ps1 -ListKeys                   # every supported key / media / mouse action
 .\macropad.ps1 -Restore backups\factory.json
+
+.\macropad.ps1 -Apply config.json -Verify  # write, then read back and confirm it took
+.\macropad.ps1 -Apply config.json -Layer 1 # one layer only, ~5s instead of ~15s
+.\macropad.ps1 -Compare config.json        # diff the device against a config, writing nothing
+.\macropad.ps1 -Profiles                   # list saved profiles
+.\macropad.ps1 -Apply gaming               # -Apply takes a profile name or a file path
 ```
+
+`-Verify` and `-Compare` exit non-zero if the device does not match, so they work in a script.
 
 `-Apply` always dumps the current on-device config to `backups\` first, unless you pass `-NoBackup`.
 
 ## The GUI
+
+Opens **dark by default**. The toggle in the top right switches to light and the choice is
+remembered in `%APPDATA%\mini_keyboard_controller\settings.json`; `-Light` forces light for one run.
+
 
 `macropad-gui.ps1` is a WPF window over the same module — it contains no protocol code of its own,
 and applying goes through the identical `Read-PadConfigFile` → `Write-PadConfig` path the CLI uses,
 so the two cannot drift.
 
 - **Read Device** pulls the pad's current configuration into the grid.
-- Select a slot, then either click **Press keys…** and type the combination, or pick from the
-  **Media** / **Mouse** dropdowns, or type a binding directly.
-- **Apply to Pad** backs up the current on-device config to `backups\` first, then writes.
+- Select a slot, then either click **Press keys…** and type the combination, click **Pick…** to
+  browse every supported key / media / mouse action, or type a binding directly.
+- **Apply All Layers** backs up to `backups\` first, writes, then reads back and verifies.
+  **Apply Layer N** does one layer in about a third of the time.
+- **Verify** compares the pad against what is on screen without writing anything.
+- **Open Backup…** loads any `backups\*.json` as *editable* bindings rather than replaying it blind.
+- **Profiles…** saves and loads named configs from `profiles\`.
+
+Shortcuts: `Ctrl+Z` / `Ctrl+Y` undo and redo, `Ctrl+Shift+C` / `Ctrl+Shift+V` copy and paste a
+binding between slots. **Duplicate this layer to…** copies a whole layer in one step.
+
+### Key tester
+
+**Key Tester** opens a window listing what the pad actually sends as you press it. It uses the Raw
+Input API and filters on the device name, so input from your main keyboard is excluded — anything
+appearing in that list genuinely came from the pad. Useful for confirming a binding took without
+switching to Notepad, and for working out whether layers 2 and 3 are reachable on a pad with no
+layer-switch button.
 
 Two behaviours worth knowing:
 
@@ -162,13 +189,37 @@ Confirmed by reading the factory config off this device:
 4. The LED command's byte layout could not be confirmed on this device, which has no backlight to
    observe. Do not trust it without testing on backlit hardware.
 
+## PowerShell traps worth knowing
+
+Three bugs in this codebase came from the same class of problem and cost real time. If you extend
+it, watch for these:
+
+**Variable names are case-insensitive**, so a `foreach ($layer in …)` loop *rebinds* an `[int[]] $Layer`
+parameter, and a local `$dump` rebinds a `-Dump` switch. Both produce baffling type-conversion errors
+on the second iteration. Loop variables here are named `$layerConfig` and `$snapshot` for that reason.
+
+**`$dict[$key] = $brush` on a `ResourceDictionary` silently coerces a `SolidColorBrush` down to a
+`Color`.** Every element binding that key to a Brush property then throws
+`'#FF17171B' is not a valid value for property 'Background'` — which reads like a string problem but
+is `Color.ToString()`. Assign through `([System.Collections.IDictionary]$dict).Item($key) = $brush`
+instead; see `Set-WindowTheme` in `src/Theme.ps1`.
+
+**Passing a here-string containing double quotes to a native command** (e.g. `git commit -m`) gets
+re-tokenised by PowerShell and splits the argument. Write the text to a file and use `-F`, and use
+`[IO.File]::WriteAllText` with a no-BOM encoding — `Set-Content -Encoding UTF8` prepends a BOM that
+ends up in the commit subject.
+
 ## Files
 
 | Path | Role |
 |---|---|
 | `macropad-gui.ps1` | WPF configurator |
 | `MacroPad-GUI.cmd` | Double-click launcher for the GUI |
+| `src/Theme.ps1` | Dark and light palettes |
+| `src/GuiModel.ps1` | Model, undo history, profiles, settings (no WPF — used by the CLI too) |
 | `src/WpfKeyMap.ps1` | WPF key enum → binding names, for key capture |
+| `src/RawInput.cs` | Raw Input P/Invoke, so the key tester can attribute input to the pad |
+| `profiles/` | Saved named configs |
 | `macropad.ps1` | CLI entry point |
 | `src/HidTransport.cs` | P/Invoke HID layer: enumerate, open, write, read |
 | `src/MacroPad.psm1` | Protocol encoding, config parsing, orchestration |
