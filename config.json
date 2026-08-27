@@ -1,67 +1,88 @@
-// Macro pad configuration -- 12 keys + 2 knobs, 3 layers.
-// Apply with:  .\macropad.ps1 -Apply config.json
-// Preview with: .\macropad.ps1 -Apply config.json -WhatIf
-//
-// Key positions, in normal orientation (keys left, knobs right):
-//
-//     key1   key2   key3   key4          (knob1)
-//     key5   key6   key7   key8
-//     key9   key10  key11  key12         (knob2)
-//
-// Binding syntax:
-//   "a"                       a single key
-//   "ctrl+c"                  modifiers: ctrl, shift, alt, win
-//   ["h","e","l","l","o"]     a macro, up to 5 keypresses
-//   "volumeup"                a media key (cannot take modifiers)
-//   "click", "click(right)"   mouse buttons
-//   "wheel(1)", "move(10,0)"  mouse wheel and relative movement
-//   ""                        unbound
-//
-// Run  .\macropad.ps1 -ListKeys  for the full vocabulary.
-//
-// NOTE: this pad has three discrete layer-indicator LEDs (L1/L2/L3) driven by
-// the firmware, not an RGB backlight. There is nothing to colour, so no "led"
-// keys appear below. The tool still supports them for backlit models in this
-// family -- see README.
-{
-  "layers": [
-    {
-      // Layer 1 -- editing and window management.
-      "buttons": [
-        "ctrl+z",     "ctrl+y",      "ctrl+c",       "ctrl+v",
-        "ctrl+x",     "ctrl+a",      "ctrl+f",       "ctrl+s",
-        "alt+tab",    "win+tab",     "ctrl+shift+t", "shift+win+s"
-      ],
-      "knobs": [
-        { "ccw": "previoustrack", "press": "playpause", "cw": "nexttrack" },
-        { "ccw": "volumedown",    "press": "mute",      "cw": "volumeup"  }
-      ]
-    },
-    {
-      // Layer 2 -- F13-F24. Windows ships nothing bound to these, so no
-      // application will ever collide with them. Ideal targets for AutoHotkey,
-      // PowerToys, or any host-side listener you add later.
-      "buttons": [
-        "f13", "f14", "f15", "f16",
-        "f17", "f18", "f19", "f20",
-        "f21", "f22", "f23", "f24"
-      ],
-      "knobs": [
-        { "ccw": "ctrl+minus",    "press": "ctrl+0",   "cw": "ctrl+equal" },
-        { "ccw": "volumedown",    "press": "mute",     "cw": "volumeup"   }
-      ]
-    },
-    {
-      // Layer 3 -- navigation and mouse.
-      "buttons": [
-        "home",         "up",           "end",          "pageup",
-        "left",         "down",         "right",        "pagedown",
-        "click(left)",  "click(middle)", "click(right)", "pagedown"
-      ],
-      "knobs": [
-        { "ccw": "wheel(-1)",  "press": "click",  "cw": "wheel(1)"   },
-        { "ccw": "browserback", "press": "playpause", "cw": "browserforward" }
-      ]
-    }
-  ]
+﻿{
+    "layers":  [
+                   {
+                       "buttons":  [
+                                       "escape",
+                                       "shift+win+s",
+                                       "ctrl+w",
+                                       "ctrl+shift+t",
+                                       "ctrl+win+v",
+                                       "alt+tab",
+                                       "ctrl+shift+tab",
+                                       "ctrl+tab",
+                                       "ctrl+x",
+                                       "ctrl+c",
+                                       "ctrl+v",
+                                       "win+tab"
+                                   ],
+                       "knobs":  [
+                                     {
+                                         "ccw":  "previoustrack",
+                                         "press":  "playpause",
+                                         "cw":  "nexttrack"
+                                     },
+                                     {
+                                         "ccw":  "volumedown",
+                                         "press":  "mute",
+                                         "cw":  "volumeup"
+                                     }
+                                 ]
+                   },
+                   {
+                       "buttons":  [
+                                       "a",
+                                       "b",
+                                       "c",
+                                       "d",
+                                       "e",
+                                       "f",
+                                       "g",
+                                       "h",
+                                       "i",
+                                       "j",
+                                       "k",
+                                       "l"
+                                   ],
+                       "knobs":  [
+                                     {
+                                         "ccw":  "3",
+                                         "press":  "2",
+                                         "cw":  "1"
+                                     },
+                                     {
+                                         "ccw":  "6",
+                                         "press":  "5",
+                                         "cw":  "4"
+                                     }
+                                 ]
+                   },
+                   {
+                       "buttons":  [
+                                       "a",
+                                       "b",
+                                       "c",
+                                       "d",
+                                       "e",
+                                       "f",
+                                       "g",
+                                       "h",
+                                       "i",
+                                       "j",
+                                       "k",
+                                       "l"
+                                   ],
+                       "knobs":  [
+                                     {
+                                         "ccw":  "3",
+                                         "press":  "2",
+                                         "cw":  "1"
+                                     },
+                                     {
+                                         "ccw":  "6",
+                                         "press":  "5",
+                                         "cw":  "4"
+                                     }
+                                 ]
+                   }
+               ]
 }

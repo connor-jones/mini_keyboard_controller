@@ -69,6 +69,10 @@ param(
     [Parameter(ParameterSetName = 'Apply')]
     [string] $BackupPath,
 
+    # Also write what is on the pad out as an editable config file.
+    [Parameter(ParameterSetName = 'Dump')]
+    [string] $AsConfig,
+
     # Firmware revisions disagree on the bind opcode; override if needed.
     [ValidateSet('FD', 'FE')]
     [string] $BindOpcode,
@@ -204,6 +208,15 @@ switch ($PSCmdlet.ParameterSetName) {
                 }
             }
             Write-Host ''
+
+            if ($AsConfig) {
+                $bindings = @(Read-PadBindings -Pad $pad -Layers 3)
+                $lost = ConvertTo-PadConfigFile -Bindings $bindings -Path $AsConfig
+                Write-Host "Wrote editable config to $AsConfig" -ForegroundColor Green
+                if ($lost -gt 0) {
+                    Write-Warning "$lost mouse binding(s) could not be recovered and are blank in that file."
+                }
+            }
         } finally {
             $pad.Dispose()
         }

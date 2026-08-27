@@ -23,6 +23,7 @@ Click a key, press the combination you want, hit **Apply to Pad**. Or use the CL
 ```powershell
 .\macropad.ps1 -Probe                      # find the pad, confirm the config channel
 .\macropad.ps1 -Dump                       # read current bindings into backups\
+.\macropad.ps1 -Dump -AsConfig config.json # ...and write them out as an editable config
 .\macropad.ps1 -Apply config.json -WhatIf  # preview the exact reports
 .\macropad.ps1 -Apply config.json          # back up, program, save to flash
 .\macropad.ps1 -ListKeys                   # every supported key / media / mouse action
@@ -87,16 +88,26 @@ separate macro type in firmware and **cannot** take modifiers or appear inside a
 Bindings name a **key position**, not a character. On a non-US layout, `"a"` produces whatever that
 physical key types.
 
-### LEDs
+### LEDs — this unit has none fitted
 
-**This pad has no RGB backlight.** It has three discrete indicator LEDs (L1/L2/L3) that the
-firmware drives itself to show the active layer. There is nothing for software to colour, so
-`config.json` ships without any `led` keys.
+**Settled by inspection and testing: this board has no LEDs soldered anywhere.** The L1/L2/L3
+indicator pads are unpopulated, and the key switches are not backlit. There is also no layer-switch
+button on the board.
 
-The `led` support is still implemented for the backlit models in this family, which accept
-`03 FE B0 <layer> 08 …`. Colors are `off, red, orange, yellow, green, cyan, blue, purple`; effects
-are `off, static, ripple, wave, reactive, white`. On this device the command is accepted and does
-nothing visible — treat the exact byte layout as **unverified**, since it could not be tested here.
+Eight backlight command variants were swept across all three layers with nothing visible:
+
+```
+03 FE B0 <layer> 08 00 00 00 00 00 01 00 <code>    code = 11, 71, 01, 12, 14, 05, 81
+03 FE B0 <layer> 08 00 00 00 00 00 01 11 00        (code moved to byte 11)
+```
+
+So the `led` config keys are a **no-op on this hardware** and `config.json` ships without them. The
+support remains for backlit models in this family: colors `off, red, orange, yellow, green, cyan,
+blue, purple`, effects `off, static, ripple, wave, reactive, white`, packed as
+`(color << 4) | effect` at byte 12. Treat that layout as **unverified** — it could not be confirmed
+here, because there was nothing to observe.
+
+Do not spend time re-investigating this. It is a populated-components question, not a protocol one.
 
 ### Layer 2 is F13–F24 on purpose
 

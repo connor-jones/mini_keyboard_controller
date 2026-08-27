@@ -641,6 +641,61 @@ function Read-PadBindings {
     }
 }
 
+function ConvertTo-PadConfigFile {
+    <#
+    .SYNOPSIS
+        Turn Read-PadBindings output into an editable config.json.
+    .DESCRIPTION
+        Closes the loop device -> config file -> GUI, so what is on the pad can
+        be recovered as something you can edit rather than only replayed as raw
+        reports. Spare slots (0x0D-0x0F, 0x16-0x18), which no physical key maps
+        to, are dropped.
+    .OUTPUTS
+        The number of mouse slots that could not be recovered.
+    #>
+    [CmdletBinding()]
+    param(
+        [psobject[]] $Bindings,
+        [string] $Path
+    )
+
+    $layers = @()
+    $unreadable = 0
+
+    for ($layer = 1; $layer -le $script:LayerCount; $layer++) {
+        $slots = @{}
+        foreach ($entry in $Bindings) {
+            if ($entry.Layer -ne $layer) { continue }
+            if ($entry.Type -eq 'mouse') { $unreadable++ }
+            $slots[$entry.Button] = [string]$entry.Binding
+        }
+        if ($slots.Count -eq 0) { continue }
+
+        $buttons = @()
+        for ($i = 1; $i -le $script:KeyCount; $i++) {
+            $name = "key$i"
+            $buttons += $(if ($slots.ContainsKey($name)) { $slots[$name] } else { '' })
+        }
+
+        $knobs = @()
+        for ($k = 1; $k -le $script:KnobCount; $k++) {
+            $knob = [ordered]@{}
+            foreach ($action in 'ccw', 'press', 'cw') {
+                $name = "knob$k.$action"
+                $knob[$action] = $(if ($slots.ContainsKey($name)) { $slots[$name] } else { '' })
+            }
+            $knobs += $knob
+        }
+
+        $layers += [ordered]@{ buttons = $buttons; knobs = $knobs }
+    }
+
+    [ordered]@{ layers = $layers } | ConvertTo-Json -Depth 8 |
+        Set-Content -LiteralPath $Path -Encoding UTF8
+
+    $unreadable
+}
+
 function Export-PadConfig {
     <#
     .SYNOPSIS
@@ -1004,7 +1059,7 @@ Export-ModuleMember -Function @(
     'New-PadBindReport', 'New-PadLedReport', 'New-PadDelayReport',
     'New-PadCommitReport', 'New-PadSaveReport', 'New-PadReadReport', 'New-PadReport',
     'Format-PadReport',
-    'Read-PadLayer', 'Read-PadBindings', 'Export-PadConfig',
+    'Read-PadLayer', 'Read-PadBindings', 'Export-PadConfig', 'ConvertTo-PadConfigFile',
     'ConvertFrom-PadReport', 'ConvertFrom-PadModifier',
     'Set-PadButton', 'Set-PadLayerLed', 'Save-PadFlash',
     'Read-PadConfigFile', 'Write-PadConfig', 'Restore-PadConfig',
