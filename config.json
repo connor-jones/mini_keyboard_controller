@@ -18,11 +18,15 @@
 //   ""                        unbound
 //
 // Run  .\macropad.ps1 -ListKeys  for the full vocabulary.
+//
+// NOTE: this pad has three discrete layer-indicator LEDs (L1/L2/L3) driven by
+// the firmware, not an RGB backlight. There is nothing to colour, so no "led"
+// keys appear below. The tool still supports them for backlit models in this
+// family -- see README.
 {
   "layers": [
     {
       // Layer 1 -- editing and window management.
-      "led": { "color": "blue", "effect": "static" },
       "buttons": [
         "ctrl+z",     "ctrl+y",      "ctrl+c",       "ctrl+v",
         "ctrl+x",     "ctrl+a",      "ctrl+f",       "ctrl+s",
@@ -37,7 +41,6 @@
       // Layer 2 -- F13-F24. Windows ships nothing bound to these, so no
       // application will ever collide with them. Ideal targets for AutoHotkey,
       // PowerToys, or any host-side listener you add later.
-      "led": { "color": "green", "effect": "static" },
       "buttons": [
         "f13", "f14", "f15", "f16",
         "f17", "f18", "f19", "f20",
@@ -50,7 +53,6 @@
     },
     {
       // Layer 3 -- navigation and mouse.
-      "led": { "color": "purple", "effect": "static" },
       "buttons": [
         "home",         "up",           "end",          "pageup",
         "left",         "down",         "right",        "pagedown",

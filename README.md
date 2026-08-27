@@ -54,8 +54,16 @@ separate macro type in firmware and **cannot** take modifiers or appear inside a
 Bindings name a **key position**, not a character. On a non-US layout, `"a"` produces whatever that
 physical key types.
 
-LEDs are per layer: colors `off, red, orange, yellow, green, cyan, blue, purple`; effects
-`off, static, ripple, wave, reactive, white`.
+### LEDs
+
+**This pad has no RGB backlight.** It has three discrete indicator LEDs (L1/L2/L3) that the
+firmware drives itself to show the active layer. There is nothing for software to colour, so
+`config.json` ships without any `led` keys.
+
+The `led` support is still implemented for the backlit models in this family, which accept
+`03 FE B0 <layer> 08 …`. Colors are `off, red, orange, yellow, green, cyan, blue, purple`; effects
+are `off, static, ripple, wave, reactive, white`. On this device the command is accepted and does
+nothing visible — treat the exact byte layout as **unverified**, since it could not be tested here.
 
 ### Layer 2 is F13–F24 on purpose
 
@@ -107,6 +115,8 @@ Confirmed by reading the factory config off this device:
    first knob. Applying the reversal that `ch57x-keyboard-tool` documents inverts your volume knob.
 3. Byte `[6]` is `0x05` on some factory layer-1 keys and `0x00` elsewhere; purpose unknown. `0x00`
    works everywhere, including on keys the factory shipped with `0x05`.
+4. The LED command's byte layout could not be confirmed on this device, which has no backlight to
+   observe. Do not trust it without testing on backlit hardware.
 
 ## Files
 

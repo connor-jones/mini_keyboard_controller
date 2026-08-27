@@ -574,7 +574,21 @@ function ConvertFrom-PadReport {
         }
         $script:MacroTypeMouse {
             $typeName = 'mouse'
-            $binding = 'action 0x{0:X2} mod 0x{1:X2} buttons 0x{2:X2}' -f $Report[10], $Report[11], $Report[12]
+            # Mouse slots do NOT read back in the layout they are written in:
+            # the device reports 0x04 at [10] regardless of the action that was
+            # sent. Rather than mislabel the fields, show the payload raw. The
+            # button mask at [12] is the one field that does survive intact.
+            $tail = @()
+            for ($i = 10; $i -le 16 -and $i -lt $Report.Length; $i++) {
+                $tail += ('{0:X2}' -f $Report[$i])
+            }
+            $button = switch ([int]$Report[12]) {
+                1 { 'left' }
+                2 { 'right' }
+                4 { 'middle' }
+                default { '' }
+            }
+            $binding = if ($button) { "$button  [$($tail -join ' ')]" } else { "[$($tail -join ' ')]" }
         }
         default {
             $binding = '(type 0x{0:X2})' -f $type
