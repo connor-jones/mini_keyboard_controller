@@ -12,7 +12,7 @@ Pure PowerShell 5.1 plus a small inline C# P/Invoke layer. Nothing to install.
 
 ## Quick start
 
-Double-click **`MacroPad GUI.cmd`**, or from a prompt:
+Double-click **`MacroPad-GUI.cmd`**, or from a prompt:
 
 ```powershell
 .\macropad-gui.ps1
@@ -156,7 +156,7 @@ Confirmed by reading the factory config off this device:
 | Path | Role |
 |---|---|
 | `macropad-gui.ps1` | WPF configurator |
-| `MacroPad GUI.cmd` | Double-click launcher for the GUI |
+| `MacroPad-GUI.cmd` | Double-click launcher for the GUI |
 | `src/WpfKeyMap.ps1` | WPF key enum → binding names, for key capture |
 | `macropad.ps1` | CLI entry point |
 | `src/HidTransport.cs` | P/Invoke HID layer: enumerate, open, write, read |
