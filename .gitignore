@@ -1,0 +1,7 @@
+# Timestamped pre-apply dumps are working files, not history.
+backups/*.json
+
+# ...but the original factory configuration is the recovery path. Keep it.
+!backups/factory.json
+
+*.log
