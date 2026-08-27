@@ -603,6 +603,44 @@ function ConvertFrom-PadReport {
     }
 }
 
+function Read-PadBindings {
+    <#
+    .SYNOPSIS
+        Read every layer off the device as structured objects.
+    .DESCRIPTION
+        Where Export-PadConfig produces a backup file, this produces data a
+        caller can edit -- the GUI loads the device through it. Keyboard and
+        media bindings come back in config-file syntax and can be written
+        straight back out; mouse slots do not survive the round trip and are
+        reported with an empty Binding.
+    #>
+    [CmdletBinding()]
+    param(
+        [MiniKeyboard.HidTransport] $Pad,
+        [int] $Layers = 3
+    )
+
+    for ($layer = 1; $layer -le $Layers; $layer++) {
+        $reports = @(Read-PadLayer -Pad $Pad -Layer $layer |
+            Sort-Object { if ($_.Length -gt 2) { [int]$_[2] } else { 999 } })
+
+        foreach ($r in $reports) {
+            $decoded = ConvertFrom-PadReport -Report $r
+            $usable = $decoded.Binding
+            if ($decoded.Type -eq 'mouse' -or $decoded.Binding -eq '(unbound)') {
+                $usable = ''
+            }
+            [pscustomobject]@{
+                Layer   = $layer
+                Button  = $decoded.Button
+                Type    = $decoded.Type
+                Binding = $usable
+                Raw     = $decoded.Binding
+            }
+        }
+    }
+}
+
 function Export-PadConfig {
     <#
     .SYNOPSIS
@@ -844,12 +882,17 @@ function Write-PadConfig {
     <#
     .SYNOPSIS
         Apply a validated config to the device.
+    .PARAMETER OnProgress
+        Optional callback invoked per slot with (done, total, label). The GUI
+        uses it to update its status line and pump the dispatcher, so the write
+        loop is not duplicated there. The CLI passes nothing and is unaffected.
     #>
     [CmdletBinding()]
     param(
         [MiniKeyboard.HidTransport] $Pad,
         [psobject] $Config,
-        [switch] $DryRun
+        [switch] $DryRun,
+        [scriptblock] $OnProgress
     )
 
     $total = 0
@@ -871,10 +914,13 @@ function Write-PadConfig {
 
         foreach ($entry in (@($layer.Buttons) + @($layer.Knobs))) {
             $done++
+            $label = "Layer $($layer.Number): $($entry.Name) -> $($entry.Binding.Source)"
             if (-not $DryRun) {
-                Write-Progress -Activity 'Programming macro pad' `
-                    -Status "Layer $($layer.Number): $($entry.Name) -> $($entry.Binding.Source)" `
+                Write-Progress -Activity 'Programming macro pad' -Status $label `
                     -PercentComplete ([int](100 * $done / [Math]::Max($total, 1)))
+                if ($null -ne $OnProgress) {
+                    & $OnProgress $done $total $label
+                }
             }
             Set-PadButton -Pad $Pad -ButtonId $entry.ButtonId -Layer $layer.Number `
                 -Binding $entry.Binding -DryRun:$DryRun `
@@ -958,7 +1004,8 @@ Export-ModuleMember -Function @(
     'New-PadBindReport', 'New-PadLedReport', 'New-PadDelayReport',
     'New-PadCommitReport', 'New-PadSaveReport', 'New-PadReadReport', 'New-PadReport',
     'Format-PadReport',
-    'Read-PadLayer', 'Export-PadConfig', 'ConvertFrom-PadReport', 'ConvertFrom-PadModifier',
+    'Read-PadLayer', 'Read-PadBindings', 'Export-PadConfig',
+    'ConvertFrom-PadReport', 'ConvertFrom-PadModifier',
     'Set-PadButton', 'Set-PadLayerLed', 'Save-PadFlash',
     'Read-PadConfigFile', 'Write-PadConfig', 'Restore-PadConfig',
     'Get-PadKeyNames'

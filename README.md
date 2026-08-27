@@ -12,6 +12,14 @@ Pure PowerShell 5.1 plus a small inline C# P/Invoke layer. Nothing to install.
 
 ## Quick start
 
+Double-click **`MacroPad GUI.cmd`**, or from a prompt:
+
+```powershell
+.\macropad-gui.ps1
+```
+
+Click a key, press the combination you want, hit **Apply to Pad**. Or use the CLI:
+
 ```powershell
 .\macropad.ps1 -Probe                      # find the pad, confirm the config channel
 .\macropad.ps1 -Dump                       # read current bindings into backups\
@@ -22,6 +30,31 @@ Pure PowerShell 5.1 plus a small inline C# P/Invoke layer. Nothing to install.
 ```
 
 `-Apply` always dumps the current on-device config to `backups\` first, unless you pass `-NoBackup`.
+
+## The GUI
+
+`macropad-gui.ps1` is a WPF window over the same module — it contains no protocol code of its own,
+and applying goes through the identical `Read-PadConfigFile` → `Write-PadConfig` path the CLI uses,
+so the two cannot drift.
+
+- **Read Device** pulls the pad's current configuration into the grid.
+- Select a slot, then either click **Press keys…** and type the combination, or pick from the
+  **Media** / **Mouse** dropdowns, or type a binding directly.
+- **Apply to Pad** backs up the current on-device config to `backups\` first, then writes.
+
+Two behaviours worth knowing:
+
+- **Apply is disabled while any slot anywhere is invalid**, not just the one on screen — a bad
+  binding on layer 3 blocks the whole write.
+- **Mouse slots cannot be read back** from this firmware. After *Read Device* they show
+  `(not readable)` and deliberately fail validation, so you must set or clear each one. Without
+  that, *Read Device* followed by *Apply* would silently wipe your mouse bindings.
+
+Some chords can't be captured because Windows consumes them first — `alt+tab`, `win+l`,
+`ctrl+alt+del`. Type those into the binding box instead.
+
+Run `.\macropad-gui.ps1 -SelfTest` to verify the window builds, key capture maps correctly, and the
+model round-trips through the config parser — no device or human needed.
 
 ## Layout
 
@@ -122,6 +155,9 @@ Confirmed by reading the factory config off this device:
 
 | Path | Role |
 |---|---|
+| `macropad-gui.ps1` | WPF configurator |
+| `MacroPad GUI.cmd` | Double-click launcher for the GUI |
+| `src/WpfKeyMap.ps1` | WPF key enum → binding names, for key capture |
 | `macropad.ps1` | CLI entry point |
 | `src/HidTransport.cs` | P/Invoke HID layer: enumerate, open, write, read |
 | `src/MacroPad.psm1` | Protocol encoding, config parsing, orchestration |
