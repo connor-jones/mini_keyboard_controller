@@ -289,7 +289,10 @@ function Save-PadProfile {
 # --- Settings --------------------------------------------------------------
 
 function Get-AppSettings {
-    $defaults = @{ theme = 'dark'; lastProfile = ''; lastConfig = '' }
+    # skipSleepCheck is 'yes' once the user has told the startup check to stop
+    # offering the sleep fix. Stored as a string so the loader below, which
+    # coerces every value with [string], round-trips it unchanged.
+    $defaults = @{ theme = 'dark'; lastProfile = ''; lastConfig = ''; skipSleepCheck = '' }
     if (-not (Test-Path -LiteralPath $script:SettingsPath)) { return $defaults }
     try {
         $loaded = Get-Content -LiteralPath $script:SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json

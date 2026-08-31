@@ -41,6 +41,7 @@ Import-Module (Join-Path $PSScriptRoot 'src\MacroPad.psm1') -Force -DisableNameC
 . (Join-Path $PSScriptRoot 'src\WpfKeyMap.ps1')
 . (Join-Path $PSScriptRoot 'src\Theme.ps1')
 . (Join-Path $PSScriptRoot 'src\GuiModel.ps1')
+. (Join-Path $PSScriptRoot 'src\DevicePower.ps1')
 
 if (-not ('MiniKeyboard.RawInput' -as [type])) {
     Add-Type -Path (Join-Path $PSScriptRoot 'src\RawInput.cs')
@@ -1093,12 +1094,90 @@ function Show-KeyTester {
 
 $ui.BtnTester.Add_Click({ Show-KeyTester })
 
+function Invoke-ElevatedCli {
+    <#
+    .SYNOPSIS
+        Run macropad.ps1 elevated and return its exit code, or $null if the user
+        dismissed the UAC prompt.
+
+    .DESCRIPTION
+        The GUI deliberately does not run elevated -- only the device power
+        commands need it, and a whole window running as administrator to service
+        two buttons is the wrong trade. So those two shell out instead.
+    #>
+    param([string[]] $Arguments)
+
+    $cli = Join-Path $PSScriptRoot 'macropad.ps1'
+    try {
+        $proc = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru `
+            -ArgumentList (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                             '-File', "`"$cli`"") + $Arguments)
+        return $proc.ExitCode
+    } catch {
+        # Cancelling the UAC prompt throws; that is a choice, not a failure.
+        return $null
+    }
+}
+
+function Invoke-SleepFixCheck {
+    <#
+    .SYNOPSIS
+        Offer the after-sleep fix on startup, once, if it is not already in place.
+
+    .DESCRIPTION
+        This pad stops responding after the machine sleeps until it is
+        re-enumerated, and the fix is a one-off. Offering it here means the
+        problem gets fixed by the people who actually hit it, rather than only
+        by the ones who read the README.
+
+        Wrapped so that nothing in here can stop the window opening.
+    #>
+    try {
+        $settings = Get-AppSettings
+        if ($settings.skipSleepCheck -eq 'yes') { return }
+
+        $reasons = @(Get-PadSleepRisk)
+        if ($reasons.Count -eq 0) { return }
+
+        $message = "This pad stops responding after the machine sleeps, until it is unplugged " +
+                   "and plugged back in. Its firmware does not restart itself on resume.`n`n" +
+                   "Outstanding on this PC:`n" +
+                   (($reasons | ForEach-Object { "  - $_" }) -join "`n") + "`n`n" +
+                   "Apply the fix now? It is a one-off and takes a few seconds.`n`n" +
+                   "Yes     - apply it (Windows will ask for administrator permission)`n" +
+                   "No      - not now, ask again next time`n" +
+                   "Cancel  - never ask again"
+
+        $answer = [Windows.MessageBox]::Show($message, 'Macro Pad - fix sleep behaviour',
+            'YesNoCancel', 'Question')
+
+        if ($answer -eq 'Cancel') {
+            $settings.skipSleepCheck = 'yes'
+            Save-AppSettings -Settings $settings
+            Set-Status 'Sleep fix skipped. Run .\macropad.ps1 -FixSleep any time.' 'TextDim'
+            return
+        }
+        if ($answer -ne 'Yes') { return }
+
+        Set-Status 'Applying the sleep fix...' 'Warn'
+        Update-UiNow
+
+        $code = Invoke-ElevatedCli -Arguments @('-FixSleep')
+        if ($null -eq $code) {
+            Set-Status 'Sleep fix cancelled.' 'TextDim'
+        } elseif ($code -eq 0 -and @(Get-PadSleepRisk).Count -eq 0) {
+            Set-Status 'Sleep fix applied. The pad should survive sleep now.' 'Ok'
+        } else {
+            # Do not claim success on the exit code alone -- re-read the state.
+            Set-Status 'Sleep fix did not fully apply. Run .\macropad.ps1 -FixSleep elevated.' 'Danger'
+        }
+    } catch {
+        Set-Status "Could not check sleep settings: $($_.Exception.Message)" 'TextDim'
+    }
+}
+
 $ui.BtnReset.Add_Click({
     # A soft replug, for when the pad has stopped responding after sleep.
-    #
-    # This needs elevation and the GUI deliberately does not run elevated, so
-    # shell out to a UAC-prompted copy of the CLI rather than making the user
-    # restart the whole window as administrator.
     $answer = [Windows.MessageBox]::Show(
         "Re-enumerate the pad? This is the software equivalent of unplugging and " +
         "replugging it, and takes a couple of seconds.`n`nYour bindings are not affected.`n`n" +
@@ -1108,19 +1187,14 @@ $ui.BtnReset.Add_Click({
 
     Set-Status 'Resetting the pad...' 'Warn'
     Update-UiNow
-    try {
-        $resetScript = Join-Path $PSScriptRoot 'macropad.ps1'
-        $proc = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru `
-            -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
-                          '-File', "`"$resetScript`"", '-Reset', '-Quiet'
-        if ($proc.ExitCode -eq 0) {
-            Set-Status 'Pad re-enumerated. It should respond again now.' 'Ok'
-        } else {
-            Set-Status 'Reset failed. Unplug and replug the pad.' 'Danger'
-        }
-    } catch {
-        # Cancelling the UAC prompt lands here; not worth an alarming message.
-        Set-Status "Reset cancelled or failed: $($_.Exception.Message)" 'Danger'
+
+    $code = Invoke-ElevatedCli -Arguments @('-Reset', '-Quiet')
+    if ($null -eq $code) {
+        Set-Status 'Reset cancelled.' 'TextDim'
+    } elseif ($code -eq 0) {
+        Set-Status 'Pad re-enumerated. It should respond again now.' 'Ok'
+    } else {
+        Set-Status 'Reset failed. Unplug and replug the pad.' 'Danger'
     }
 })
 
@@ -1226,6 +1300,16 @@ if ($SelfTest) {
         Remove-Item -LiteralPath $temp -ErrorAction SilentlyContinue
     }
 
+    # Get-PadSleepRisk runs on the startup path, so it must never throw --
+    # including with no pad attached and with no elevation.
+    try {
+        $risks = @(Get-PadSleepRisk)
+        Write-Host "  sleep risk check    : ok ($($risks.Count) outstanding)"
+    } catch {
+        Write-Host "  sleep risk check    : THREW - $($_.Exception.Message)" -ForegroundColor Red
+        $failures += 'sleep risk'
+    }
+
     $markerBlocked = -not (Test-SlotBinding -Text $script:UnreadableMarker).Ok
     Write-Host "  mouse marker blocks : $markerBlocked"
     if (-not $markerBlocked) { $failures += 'mouse marker' }
@@ -1237,5 +1321,9 @@ if ($SelfTest) {
     Write-Host "PASSED" -ForegroundColor Green
     exit 0
 }
+
+# ContentRendered, not Loaded: the window is actually on screen by then, so the
+# prompt appears over a drawn window rather than a grey rectangle.
+$window.Add_ContentRendered({ Invoke-SleepFixCheck })
 
 $window.ShowDialog() | Out-Null

@@ -217,6 +217,17 @@ does not restart its HID reporting after a resume.** Only a USB re-enumeration f
 Step 1 alone fixes idle; step 2 is what covers actual sleep. `-PowerStatus` shows the current state
 of all of it, and `-UndoFixSleep` removes the task.
 
+The GUI checks this on startup and offers to apply it if anything is outstanding, so the fix reaches
+people who hit the problem rather than only those who read this file. *Cancel* on that prompt means
+never ask again (`skipSleepCheck` in the settings file).
+
+**The task is given an explicit security descriptor** so standard users can read it. A task
+registered to run as SYSTEM gets a default ACL granting Users nothing, and an unelevated
+`Get-ScheduledTask` then returns *nothing* — indistinguishable from the task not existing. Since the
+GUI runs unelevated and asks "is the fix installed?" on every start, without this it would nag about
+a fix that was already in place. Users get read and execute only; write access to a task running as
+SYSTEM would be a privilege escalation, not a convenience.
+
 `-Reset` does the re-enumeration on demand — the software equivalent of unplugging, about 2.5
 seconds, bindings untouched. It is also the **Reset Device** button in the GUI, which shells out to
 an elevated copy of the CLI rather than running the whole window as administrator.

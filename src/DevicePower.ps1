@@ -154,6 +154,37 @@ function Get-PadPowerState {
     }
 }
 
+function Get-PadSleepRisk {
+    <#
+    .SYNOPSIS
+        What is still left that would let the pad die after a sleep.
+
+    .DESCRIPTION
+        Read-only and elevation-free, so the GUI can call it on every start.
+        Returns a list of plain-English reasons, empty when nothing is wrong.
+
+        Never throws: this runs on the startup path, and a pad that is unplugged
+        or a WMI query that fails must not stop the window opening.
+    #>
+    $reasons = New-Object System.Collections.Generic.List[string]
+    try {
+        $state = Get-PadPowerState
+    } catch {
+        return @()   # No pad, or nothing readable -- nothing to advise about.
+    }
+
+    $suspendable = @($state.Interfaces | Where-Object {
+        $_.SelectiveSuspend -or $_.EnhancedPower -or $_.AllowIdleInD3 -or $_.CanPowerOff
+    })
+    if ($suspendable.Count -gt 0) {
+        $reasons.Add('Windows is still allowed to power down the pad while it is idle.')
+    }
+    if (-not $state.ResumeFixInstalled) {
+        $reasons.Add('The pad is not re-enumerated automatically after the machine resumes.')
+    }
+    @($reasons)
+}
+
 function Disable-PadPowerSaving {
     <#
     .SYNOPSIS
@@ -337,8 +368,42 @@ function Install-PadResumeFix {
         Register-ScheduledTask -TaskName $script:ResumeTaskName -Action $action -Trigger $trigger `
             -Principal $principal -Settings $settings -Force `
             -Description 'Re-enumerates the CH57x macro pad after the system resumes, because its firmware does not restart HID reporting on its own.' | Out-Null
+
+        Grant-PadResumeTaskRead
     }
     $script:ResumeTaskName
+}
+
+function Grant-PadResumeTaskRead {
+    <#
+    .SYNOPSIS
+        Let standard users see the resume task.
+
+    .DESCRIPTION
+        A task registered to run as SYSTEM gets a default security descriptor
+        that grants nothing to Users, so an unelevated Get-ScheduledTask cannot
+        see it at all -- it returns nothing, which is indistinguishable from the
+        task not existing. The GUI runs unelevated and asks "is the fix
+        installed?" on every start, so without this it would nag forever about a
+        fix that is already in place.
+
+        Read and execute only. Users must not be able to modify a task that runs
+        as SYSTEM: that would turn this convenience into a privilege escalation.
+    #>
+    [CmdletBinding()]
+    param()
+
+    # BA/SY keep full control; BU (Builtin Users) gets generic read + execute.
+    $sddl = 'D:P(A;;GA;;;BA)(A;;GA;;;SY)(A;;GRGX;;;BU)'
+    try {
+        $service = New-Object -ComObject Schedule.Service
+        $service.Connect()
+        $task = $service.GetFolder('\').GetTask($script:ResumeTaskName)
+        $task.SetSecurityDescriptor($sddl, 0)
+    } catch {
+        Write-Warning ("Could not grant read access on the task: {0}" -f $_.Exception.Message)
+        Write-Warning "The fix still works; the app just cannot tell it is installed when run without admin."
+    }
 }
 
 function Uninstall-PadResumeFix {
