@@ -223,6 +223,8 @@ __STYLES__
           <Button x:Name="BtnVerify"     Content="Verify"           Margin="0,0,6,6"/>
           <Button x:Name="BtnRestore"    Content="Restore..."       Margin="0,0,6,6"/>
           <Button x:Name="BtnTester"     Content="Key Tester"       Margin="0,0,6,6"/>
+          <Button x:Name="BtnReset"      Content="Reset Device"     Margin="0,0,6,6"
+                  ToolTip="Re-enumerate the pad without unplugging it. Needs admin."/>
         </WrapPanel>
         <TextBlock x:Name="LblStatus" Text="Ready." Foreground="{DynamicResource TextDim}" TextWrapping="Wrap"/>
       </StackPanel>
@@ -315,7 +317,7 @@ $ui = @{
 
 foreach ($name in 'BtnTheme', 'BtnLayer1', 'BtnLayer2', 'BtnLayer3', 'LblFile', 'LblDirty',
                   'BtnRead', 'BtnOpen', 'BtnOpenBackup', 'BtnProfiles', 'BtnSave', 'BtnSaveAs',
-                  'BtnApply', 'BtnApplyLayer', 'BtnVerify', 'BtnRestore', 'BtnTester',
+                  'BtnApply', 'BtnApplyLayer', 'BtnVerify', 'BtnRestore', 'BtnTester', 'BtnReset',
                   'LblStatus', 'KeyGrid', 'Knob1Panel', 'Knob2Panel',
                   'LblSelected', 'TxtBinding', 'BtnCapture', 'BtnPick', 'BtnClear',
                   'LblValidation', 'BtnCopy', 'BtnPaste', 'BtnUndo', 'BtnRedo', 'BtnDupLayer') {
@@ -1090,6 +1092,37 @@ function Show-KeyTester {
 }
 
 $ui.BtnTester.Add_Click({ Show-KeyTester })
+
+$ui.BtnReset.Add_Click({
+    # A soft replug, for when the pad has stopped responding after sleep.
+    #
+    # This needs elevation and the GUI deliberately does not run elevated, so
+    # shell out to a UAC-prompted copy of the CLI rather than making the user
+    # restart the whole window as administrator.
+    $answer = [Windows.MessageBox]::Show(
+        "Re-enumerate the pad? This is the software equivalent of unplugging and " +
+        "replugging it, and takes a couple of seconds.`n`nYour bindings are not affected.`n`n" +
+        "Windows will ask for administrator permission.",
+        'Reset Device', 'OKCancel', 'Question')
+    if ($answer -ne 'OK') { return }
+
+    Set-Status 'Resetting the pad...' 'Warn'
+    Update-UiNow
+    try {
+        $resetScript = Join-Path $PSScriptRoot 'macropad.ps1'
+        $proc = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru `
+            -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                          '-File', "`"$resetScript`"", '-Reset', '-Quiet'
+        if ($proc.ExitCode -eq 0) {
+            Set-Status 'Pad re-enumerated. It should respond again now.' 'Ok'
+        } else {
+            Set-Status 'Reset failed. Unplug and replug the pad.' 'Danger'
+        }
+    } catch {
+        # Cancelling the UAC prompt lands here; not worth an alarming message.
+        Set-Status "Reset cancelled or failed: $($_.Exception.Message)" 'Danger'
+    }
+})
 
 $window.Add_Closing({
     param($sender, $e)

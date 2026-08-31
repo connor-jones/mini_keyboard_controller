@@ -71,6 +71,26 @@ param(
     [Parameter(ParameterSetName = 'ListKeys')]
     [switch] $ListKeys,
 
+    # Re-enumerate the pad in software -- the equivalent of unplugging it.
+    [Parameter(ParameterSetName = 'Reset')]
+    [switch] $Reset,
+
+    # Suppress console output; used by the scheduled task.
+    [Parameter(ParameterSetName = 'Reset')]
+    [switch] $Quiet,
+
+    # Show why the pad might be going to sleep, and what is fixed.
+    [Parameter(ParameterSetName = 'PowerStatus')]
+    [switch] $PowerStatus,
+
+    # Stop Windows suspending the pad, and reset it automatically after sleep.
+    [Parameter(ParameterSetName = 'FixSleep')]
+    [switch] $FixSleep,
+
+    # Undo -FixSleep's automatic reset task.
+    [Parameter(ParameterSetName = 'UndoFixSleep')]
+    [switch] $UndoFixSleep,
+
     # Show the reports that would be sent instead of sending them.
     [Parameter(ParameterSetName = 'Apply')]
     [Parameter(ParameterSetName = 'Restore')]
@@ -106,6 +126,10 @@ Import-Module (Join-Path $PSScriptRoot 'src\MacroPad.psm1') -Force -DisableNameC
 
 # Pure logic (model, profiles); no WPF, so it loads fine outside the GUI.
 . (Join-Path $PSScriptRoot 'src\GuiModel.ps1')
+
+# Device power management and re-enumeration. Only the -Reset / -FixSleep paths
+# need elevation; loading this file does not.
+. (Join-Path $PSScriptRoot 'src\DevicePower.ps1')
 
 function Resolve-ConfigPath {
     <#
@@ -206,7 +230,9 @@ switch ($PSCmdlet.ParameterSetName) {
 
     'Probe' {
         Write-Host "`nScanning for macro pad (VID 0x1189 / PID 0x8840)...`n" -ForegroundColor Cyan
-        $interfaces = Get-PadInterface
+        # Wrap in @(): a single collection comes back as a scalar, and under
+        # StrictMode .Count on a scalar throws rather than returning 1.
+        $interfaces = @(Get-PadInterface)
         if ($interfaces.Count -eq 0) {
             Write-Host "No macro pad found. Is it plugged in?" -ForegroundColor Red
             exit 1
@@ -347,6 +373,93 @@ switch ($PSCmdlet.ParameterSetName) {
         Write-Host "`nSaved profiles:" -ForegroundColor Cyan
         foreach ($entry in $found) { Write-Host ("  {0,-20} {1}" -f $entry.Name, $entry.Path) }
         Write-Host "`nApply one with:  .\macropad.ps1 -Apply <name>`n"
+    }
+
+    'Reset' {
+        # Runs unattended from the scheduled task, so it must never prompt and
+        # must report failure through the exit code rather than the console.
+        try {
+            $back = Reset-PadDevice
+        } catch {
+            if (-not $Quiet) { Write-Host $_.Exception.Message -ForegroundColor Red }
+            exit 1
+        }
+        if ($back) {
+            if (-not $Quiet) { Write-Host "Pad re-enumerated. It should respond again now." -ForegroundColor Green }
+        } else {
+            if (-not $Quiet) { Write-Host "Pad did not come back within the timeout. Unplug and replug it." -ForegroundColor Red }
+            exit 1
+        }
+    }
+
+    'PowerStatus' {
+        $state = Get-PadPowerState
+        Write-Host "`nPad power management" -ForegroundColor Cyan
+        Write-Host "  Device: $($state.Composite)" -ForegroundColor DarkGray
+
+        # Anything True below is a way Windows is still allowed to suspend the pad.
+        foreach ($iface in $state.Interfaces) {
+            $short = ($iface.InstanceId -split '\\')[1]
+            Write-Host "`n  $short"
+            foreach ($pair in @(
+                @{ Name = 'Selective suspend'; On = $iface.SelectiveSuspend },
+                @{ Name = 'Enhanced power mgmt'; On = $iface.EnhancedPower },
+                @{ Name = 'Allow idle in D3'; On = $iface.AllowIdleInD3 },
+                @{ Name = 'Can power off device'; On = $iface.CanPowerOff })) {
+                if ($null -eq $pair.On) {
+                    Write-Host ("    {0,-22} unknown" -f $pair.Name) -ForegroundColor DarkGray
+                    continue
+                }
+                $color = if ($pair.On) { 'Yellow' } else { 'Green' }
+                Write-Host ("    {0,-22} {1}" -f $pair.Name, $(if ($pair.On) { 'ON  (can suspend)' } else { 'off' })) -ForegroundColor $color
+            }
+        }
+
+        Write-Host ""
+        if ($null -ne $state.PlanSelectiveSuspend) {
+            Write-Host ("  Machine-wide USB selective suspend: {0}" -f `
+                $(if ($state.PlanSelectiveSuspend) { 'enabled' } else { 'disabled' })) -ForegroundColor DarkGray
+            Write-Host "  (left alone on purpose -- the per-device settings above are enough)" -ForegroundColor DarkGray
+        }
+        $fixColor = if ($state.ResumeFixInstalled) { 'Green' } else { 'Yellow' }
+        Write-Host ("  Auto-reset after sleep: {0}" -f `
+            $(if ($state.ResumeFixInstalled) { 'installed' } else { 'NOT installed' })) -ForegroundColor $fixColor
+        if (-not $state.Elevated) {
+            Write-Host "`n  Run elevated to change any of this." -ForegroundColor DarkGray
+        }
+        Write-Host ""
+    }
+
+    'FixSleep' {
+        Assert-Elevated -Action 'Fixing the sleep behaviour'
+
+        Write-Host "`nStopping Windows from suspending the pad..." -ForegroundColor Cyan
+        $touched = @(Disable-PadPowerSaving)
+        foreach ($id in $touched) { Write-Host "  cleared power saving on $(($id -split '\\')[1])" -ForegroundColor DarkGray }
+
+        Write-Host "Installing the after-sleep reset..." -ForegroundColor Cyan
+        Install-PadResumeFix | Out-Null
+        Write-Host "  scheduled task '$($script:ResumeTaskName)' registered (runs as SYSTEM, no prompt)" -ForegroundColor DarkGray
+
+        # The registry values are only read when the device starts, so the pad
+        # has to be re-enumerated before any of this takes effect.
+        Write-Host "Re-enumerating so the new settings take effect..." -ForegroundColor Cyan
+        if (Reset-PadDevice) {
+            Write-Host "`nDone. The pad should now survive sleep, and is reset automatically if it doesn't." -ForegroundColor Green
+        } else {
+            Write-Host "`nSettings applied, but the pad did not re-enumerate. Unplug and replug it once." -ForegroundColor Yellow
+        }
+        Write-Host "Check any time with:  .\macropad.ps1 -PowerStatus`n"
+    }
+
+    'UndoFixSleep' {
+        Assert-Elevated -Action 'Removing the sleep fix'
+        if (Uninstall-PadResumeFix) {
+            Write-Host "Removed the after-sleep reset task." -ForegroundColor Green
+        } else {
+            Write-Host "The after-sleep reset task was not installed." -ForegroundColor DarkGray
+        }
+        Write-Host "Per-device power settings were left as they are; change them in Device Manager if you want them back." -ForegroundColor DarkGray
     }
 
     'Restore' {

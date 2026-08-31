@@ -34,6 +34,10 @@ Click a key, press the combination you want, hit **Apply to Pad**. Or use the CL
 .\macropad.ps1 -Compare config.json        # diff the device against a config, writing nothing
 .\macropad.ps1 -Profiles                   # list saved profiles
 .\macropad.ps1 -Apply gaming               # -Apply takes a profile name or a file path
+
+.\macropad.ps1 -PowerStatus                # what is still allowed to suspend the pad
+.\macropad.ps1 -FixSleep                   # stop it dying after sleep (admin, once)
+.\macropad.ps1 -Reset                      # soft replug, no reaching for the cable (admin)
 ```
 
 `-Verify` and `-Compare` exit non-zero if the device does not match, so they work in a script.
@@ -189,6 +193,51 @@ Confirmed by reading the factory config off this device:
 4. The LED command's byte layout could not be confirmed on this device, which has no backlight to
    observe. Do not trust it without testing on backlit hardware.
 
+## Dying after sleep
+
+The pad stops responding to keys and knobs after the machine has been asleep, and only a physical
+unplug brings it back. Nothing is logged in Event Viewer, because from Windows' point of view
+nothing failed: the device suspended, resumed, and reported no error. **The CH552 firmware just
+does not restart its HID reporting after a resume.** Only a USB re-enumeration fixes it.
+
+`-FixSleep` is a one-off, elevated, and does two independent things:
+
+1. **Stops Windows suspending the pad at all.** Three separate switches control this and they live
+   in three different places — `SelectiveSuspendEnabled` (REG_BINARY, not a DWORD),
+   `EnhancedPowerManagementEnabled` and `AllowIdleIrpInD3` under the interface's `Device Parameters`
+   key, plus the Device Manager *"allow the computer to turn off this device"* checkbox, which is
+   not in the registry at all but is the `MSPower_DeviceEnable` WMI class. All four are cleared, on
+   both USB interfaces. The **machine-wide** USB selective suspend power-plan setting is deliberately
+   left alone: turning that off would stop every USB device on the system idling down to work around
+   one misbehaving pad.
+2. **Re-enumerates the pad automatically after every resume**, via a scheduled task running as
+   SYSTEM so it neither prompts for UAC nor flashes up a console. That covers system sleep, where
+   the device is dropped to D2 regardless of any of the settings above.
+
+Step 1 alone fixes idle; step 2 is what covers actual sleep. `-PowerStatus` shows the current state
+of all of it, and `-UndoFixSleep` removes the task.
+
+`-Reset` does the re-enumeration on demand — the software equivalent of unplugging, about 2.5
+seconds, bindings untouched. It is also the **Reset Device** button in the GUI, which shells out to
+an elevated copy of the CLI rather than running the whole window as administrator.
+
+### Do not use Disable-PnpDevice on this pad
+
+Worth knowing if you extend this. The reset uses `pnputil /restart-device`, **not**
+`Disable-PnpDevice` / `Enable-PnpDevice`.
+
+The pad reports device capabilities `0x94` — `Removable` and `SurpriseRemovalOK`, but *not*
+`HardwareDisabled`. `Disable-PnpDevice` therefore fails on it with a bare **"Not supported"** — but
+only *after* having already written the disabled flag. Nothing looks wrong at that point. The next
+restart then brings the device up in **problem code 22 (CM_PROB_DISABLED)**, where it stays across
+reboots, and unplugging does not clear it. `Enable-PnpDevice` is what recovers it.
+
+So the reset never disables anything. It restarts, then polls for the config channel, and if the
+node comes back in a problem state it clears that with `Enable-PnpDevice` — the one recovery action
+that cannot leave the device worse off than it found it. `pnputil` prints "Device restarted
+successfully" and exits 0 even when the node ends up disabled, so its exit code is not trusted on
+its own.
+
 ## PowerShell traps worth knowing
 
 Three bugs in this codebase came from the same class of problem and cost real time. If you extend
@@ -219,6 +268,7 @@ ends up in the commit subject.
 | `src/GuiModel.ps1` | Model, undo history, profiles, settings (no WPF — used by the CLI too) |
 | `src/WpfKeyMap.ps1` | WPF key enum → binding names, for key capture |
 | `src/RawInput.cs` | Raw Input P/Invoke, so the key tester can attribute input to the pad |
+| `src/DevicePower.ps1` | Suspend settings, soft replug, after-sleep reset task (the only elevated code) |
 | `profiles/` | Saved named configs |
 | `macropad.ps1` | CLI entry point |
 | `src/HidTransport.cs` | P/Invoke HID layer: enumerate, open, write, read |
@@ -234,6 +284,9 @@ ends up in the commit subject.
 **Keys do nothing after applying** — the bind opcode differs across firmware revisions. Try
 `-BindOpcode FE`. If layers land one off, try `-LayerOffset 1`. Then `-Dump` to see what actually
 stuck.
+
+**The pad stops responding after the machine sleeps** — run `.\macropad.ps1 -FixSleep` once, from
+an elevated prompt. See below for what it does and why.
 
 **Recovering a bad config** — `-Restore backups\factory.json`. The config channel is a separate USB
 interface whose enumeration does not depend on what is in flash, so a bad binding write can never
